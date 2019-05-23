@@ -13,7 +13,7 @@ Plugins for annotation, prediction, and training are provided.
   "type": "native-python",
   "version": "0.1.30",
   "description": "Nuclei segmentation with deep learning.",
-  "tags": ["CPU", "GPU"],
+  "tags": ["GPU", "CPU"],
   "ui": "",
   "cover": "",
   "inputs": null,
@@ -76,7 +76,6 @@ from imjoy import api
 from geojson_utils import masks_to_annotation, gen_mask_from_geojson
 from postprocessing import wsh
 import torch
-import os
 import numpy as np
 import random
 
@@ -94,13 +93,10 @@ import cv2
 from scipy.misc import imread
 import base64
 from shutil import copyfile
-
+from PIL import Image
+from io import BytesIO
 import argparse
-
-import os
 from collections import defaultdict
-
-
 
 from torch import nn
 from torch import optim
@@ -203,7 +199,8 @@ def load_path_mapping(config, training):
 def train_bowl(dash, config, paths, fn_mapping, plot_images, save_path, log_path, model_path, scale_factor):
     asyncio.set_event_loop(loop)
     dash.setLoading({'status_text': 'Loading data...', 'loading': True})
-    torch.backends.cudnn.benchmark = True
+    if api.TAG == 'GPU':
+        torch.backends.cudnn.benchmark = True
     cleanup_mac_hidden_files(config.dataset_path)
     sample_count = len(os.listdir(config.dataset_path))
     idx = list(range(sample_count))
@@ -353,25 +350,23 @@ def postprocessing(test_dir, step_callback):
         if step_callback:
             step_callback({'name': id_, 'step': n, 'total': total})
 
-if os.path.exists('/imjoy/imjoy-paper'):
-    ROOT_DIR = '/imjoy/imjoy-paper'
-else:
-    ROOT_DIR = ''
 
 class ImJoyPlugin():
     def __init__(self):
         self.dialog = None
+        self.datasets_dir = None
     async def run(self, ctx):
-        self.dialog = await api.showDialog(type='launchpad', data= [
-                {'name': 'Load trained model', 'description': 'Load a pre-trained model', 'callback': self.load_model, 'img': 'https://img.icons8.com/ios-glyphs/90/000000/upload.png'},
-                {'name': 'Annotate images', 'description': 'Start annotation of images.', 'callback': self.start_annotation, 'img': 'https://img.icons8.com/color/96/000000/edit.png'},
-                {'name': 'Generate masks', 'description': 'Generate masks from annotations for training.', 'callback': self.generate_masks, 'img': 'https://img.icons8.com/color/96/000000/metamorphose.png'},
-                {'name': 'Train with data from the engine', 'description': 'Use training data stored on a (local or remote) plugin engine.', 'callback': self.train, 'img': 'https://img.icons8.com/color/96/000000/services.png'},
-                {'name': 'Predict', 'description': 'Segment nuclei in images.', 'callback': self.predict, 'img': 'https://img.icons8.com/color/96/000000/double-right.png'},
-                {'name': 'Export trained model', 'description': 'Export the model', 'callback': self.export_model, 'img': 'https://img.icons8.com/material/96/000000/circled-down.png'},
-                {'name': 'Documentation', 'description': 'Show documentation.', 'callback': self.show_docs, 'img': 'https://img.icons8.com/color/96/000000/help.png'},
-             ]
-        )
+        await self.start_annotation()
+        # self.dialog = await api.showDialog(type='launchpad', data= [
+        #         {'name': 'Load trained model', 'description': 'Load a pre-trained model', 'callback': self.load_model, 'img': 'https://img.icons8.com/ios-glyphs/90/000000/upload.png'},
+        #         {'name': 'Annotate images', 'description': 'Start annotation of images.', 'callback': self.start_annotation, 'img': 'https://img.icons8.com/color/96/000000/edit.png'},
+        #         {'name': 'Generate masks', 'description': 'Generate masks from annotations for training.', 'callback': self.generate_masks, 'img': 'https://img.icons8.com/color/96/000000/metamorphose.png'},
+        #         {'name': 'Train with data from the engine', 'description': 'Use training data stored on a (local or remote) plugin engine.', 'callback': self.train, 'img': 'https://img.icons8.com/color/96/000000/services.png'},
+        #         {'name': 'Predict', 'description': 'Segment nuclei in images.', 'callback': self.predict, 'img': 'https://img.icons8.com/color/96/000000/double-right.png'},
+        #         {'name': 'Export trained model', 'description': 'Export the model', 'callback': self.export_model, 'img': 'https://img.icons8.com/material/96/000000/circled-down.png'},
+        #         {'name': 'Documentation', 'description': 'Show documentation.', 'callback': self.show_docs, 'img': 'https://img.icons8.com/color/96/000000/help.png'},
+        #      ]
+        # )
 
     async def show_docs(self):
         if self.dialog is not None:
@@ -444,9 +439,19 @@ class ImJoyPlugin():
          "Average nuclei size { id: 'nuclei_size', type:'number', placeholder: 20}",
         ]))
         config = load_config('configs/imjoy_dpn_softmax_s2.json')
-        ret = await api.showFileDialog(title="Please select a folder containing your testing data ( folder with a subfolder called `test`).", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
-        config.dataset_path = os.path.join(ret.path, 'test')
-        config.results_dir = os.path.join(ret.path, 'results')
+
+        if self.datasets_dir is None:
+            ret = await api.showFileDialog(title="Please select a folder containing the training and testing data as subfolders ‘train’ and ‘test.", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
+            datasets_dir = ret.path
+        else:
+            datasets_dir = self.datasets_dir
+        print("datasets_dir:", datasets_dir)
+        config.dataset_path =  os.path.join(datasets_dir, 'train')
+        config.results_dir = os.path.join(datasets_dir, 'results')
+
+        # ret = await api.showFileDialog(title="Please select a folder containing your testing data ( folder with a subfolder called `test`).", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
+        # config.dataset_path = os.path.join(ret.path, 'test')
+        # config.results_dir = os.path.join(ret.path, 'results')
         config.batch_size = 16
         config.epoch_size = 24
 
@@ -486,16 +491,24 @@ class ImJoyPlugin():
         ]))
 
         config = load_config('configs/imjoy_dpn_softmax.json')
-        ret = await api.showFileDialog(title="Please select a folder containing the training and testing data as subfolders ‘train’ and ‘test.", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
-        config.dataset_path =  os.path.join(ret.path, 'train')
-        config.results_dir = os.path.join(ret.path, 'results')
+        # ret = await api.showFileDialog(title="Please select a folder containing the training and testing data as subfolders ‘train’ and ‘test.", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
+        # config.dataset_path =  os.path.join(ret.path, 'train')
+        # config.results_dir = os.path.join(ret.path, 'results')
+        if self.datasets_dir is None:
+            ret = await api.showFileDialog(title="Please select a folder containing the training and testing data as subfolders ‘train’ and ‘test.", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
+            datasets_dir = ret.path
+        else:
+            datasets_dir = self.datasets_dir
+        print("datasets_dir:", datasets_dir)
+        config.dataset_path =  os.path.join(datasets_dir, 'train')
+        config.results_dir = os.path.join(datasets_dir, 'results')
         config.nb_epoch = options.epochs
         config.batch_size = 16
         config.epoch_size = 24
         paths, fn_mapping  = load_path_mapping(config, True)
         log_path =  os.path.join('..', 'logs', 'dpn_softmax_f0' 'fold0')
         save_path = os.path.join('..', 'weights', 'dpn_softmax_f0')
-        
+
         model_path = '../weights/dpn_softmax_f0/fold0_best.pth'
         if not os.path.exists(model_path):
             model_path = None
@@ -510,9 +523,15 @@ class ImJoyPlugin():
     async def generate_masks(self):
         if self.dialog is not None:
             self.dialog.close()
-        ret = await api.showFileDialog(root='/imjoy/imjoy-paper/data-science-bowl/dsb2018-dataset-v0.1.1', type="directory")
-        datasets_dir = ret.path
+        # ret = await api.showFileDialog(root='/imjoy/imjoy-paper/data-science-bowl/dsb2018-dataset-v0.1.1', type="directory")
+        # datasets_dir = ret.path
+        if self.datasets_dir is None:
+            ret = await api.showFileDialog(title="Please select a folder containing the training and testing data as subfolders ‘train’ and ‘test.", root='/imjoy/imjoy-paper/SEGMENTATION-DATA', type= 'directory', engine= api.ENGINE_URL)
+            datasets_dir = ret.path
+        else:
+            datasets_dir = self.datasets_dir
         print("datasets_dir:", datasets_dir)
+
         file_ids = os.listdir(os.path.join(datasets_dir, "train"))
         total = len(file_ids)
         for i, file_id in enumerate(file_ids):
@@ -530,7 +549,40 @@ class ImJoyPlugin():
     async def start_annotation(self):
         if self.dialog is not None:
             self.dialog.close()
-        await api.createWindow(name="Annotation for DPNUnet", fullscreen=True, type="ImageAnnotator", data={}, config={})
+        try:
+            ret = await api.showFileDialog(title="Please select a folder containing the training and testing data as subfolders ‘train’ and ‘test.", root=os.path.join(ROOT_DIR, "SEGMENTATION-DATA"), type= 'directory', engine= api.ENGINE_URL)
+            self.datasets_dir = ret.path
+        except:
+            print("use default datasets directory.")
+            self.datasets_dir =os.path.join(ROOT_DIR, "SEGMENTATION-DATA", "dsb2018-dataset-v0.1.1")
+
+        annotator_config = {
+            'dataset': {
+                "api_version": "0.1.6",
+                "root_folder": self.datasets_dir,
+                "name": "dsb2018-dataset-v0.1.1",
+                "channel_config": {
+                    "nuclei": {
+                        "filter": "nuclei.",
+                        "name": "nuclei"
+                    }
+                },
+                "source": "engine",
+                "engine_url": api.ENGINE_URL
+            },
+            'actions': [
+                {'name': 'Load trained model', 'callback': self.load_model, 'tooltip': 'Load a pre-trained model.'},
+                {'name': 'Generate Masks', 'callback': self.generate_masks,
+                 'tooltip': 'Generate border masks from the annotation'},
+                {'name': 'Start Training', 'callback': self.train, 'tooltip': 'Start training on this dataset.'},
+                {'name': 'Predict', 'callback': self.predict, 'tooltip': 'Run Prediction on this dataset.'},
+                {'name': 'Export model', 'callback': self.export_model, 'tooltip': 'Export the model.'},
+                {'name': 'Documentation', 'callback': self.show_docs, 'tooltip': 'Show documentation.'},
+            ]
+        }
+        await api.createWindow(name="Annotation for DPNUnet", fullscreen=True, type="ImageAnnotator",
+                               data=annotator_config, config={})
+        # await api.createWindow(name="Annotation for DPNUnet", fullscreen=True, type="ImageAnnotator", data={}, config={})
 
     def setup(self):
         api.log('initialized')
