@@ -72,22 +72,10 @@ else:
     api.alert('WARNING: you are running the plugin in CPU mode, training will be slow.')
 
 import asyncio
-from imjoy import api
-from geojson_utils import masks_to_annotation, gen_mask_from_geojson
-from postprocessing import wsh
-import torch
+from tqdm import tqdm
+from typing import Type
 import numpy as np
 import random
-
-from utils import get_csv_folds, update_config, get_folds, cleanup_mac_hidden_files
-from config import Config
-from dataset.reading_image_provider import ReadingImageProvider, CachingImageProvider, InFolderImageProvider
-from dataset.image_types import SigmoidBorderImageType, BorderImageType, PaddedImageType, PaddedSigmoidImageType
-from pytorch_utils.concrete_eval import FullImageEvaluator
-from pytorch_utils.callbacks import Callback
-from augmentations.transforms import aug_victor
-from pytorch_utils.train import train
-from merge_preds import merge_files
 import json
 import cv2
 from scipy.misc import imread
@@ -97,16 +85,25 @@ from PIL import Image
 from io import BytesIO
 import argparse
 from collections import defaultdict
-
+import torch
 from torch import nn
 from torch import optim
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data.dataloader import DataLoader as PytorchDataLoader
-from tqdm import tqdm
-from typing import Type
 
+from geojson_utils import masks_to_annotation, gen_mask_from_geojson
+from postprocessing import wsh
+from utils import get_csv_folds, update_config, get_folds, cleanup_mac_hidden_files
+from config import Config
 from dataset.neural_dataset import TrainDataset, ValDataset
+from dataset.reading_image_provider import ReadingImageProvider, CachingImageProvider, InFolderImageProvider
+from dataset.image_types import SigmoidBorderImageType, BorderImageType, PaddedImageType, PaddedSigmoidImageType
+from augmentations.transforms import aug_victor
+from merge_preds import merge_files
+from pytorch_utils.train import train
+from pytorch_utils.callbacks import Callback
+from pytorch_utils.concrete_eval import FullImageEvaluator
 from pytorch_utils.loss import dice_round, dice_loss, multi_class_dice, multi_class_dice_round, jaccard, jaccard_round
 from pytorch_utils.callbacks import EarlyStopper, ModelSaver, TensorBoard, CheckpointSaver, Callbacks, LRDropCheckpointSaver, ModelFreezer, LRStepScheduler
 from pytorch_utils.train import Estimator, models, optimizers, PytorchTrain
